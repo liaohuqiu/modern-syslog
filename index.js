@@ -20,42 +20,15 @@ exports.level = core.level;
 
 // High-level API, remove the redundant 'log' from method names.
 exports.version = require('./package.json').version;
-exports.open = open;
-exports.init = exports.open;
 exports.log = log;
 exports.upto = upto;
 exports.curmask = curmask;
 exports.setMask = setMask;
-exports.close = core.closelog;
 exports.Stream = Stream;
 
-function open(ident, option, facility) {
-  // XXX(sam) would be nice to allow single strings for option
-  core.openlog(ident, option, toFacility(facility));
+function log(ident, option, facility, level, msg, callback) {
+  core.syslog(ident, option, toFacility(facility), toLevel(level), msg, callback);
 }
-
-function log(level, msg, callback) {
-  core.syslog(toLevel(level), msg, callback);
-}
-
-function wrap(name, level) {
-  level = core.level[level];
-  exports[name] = function(msg) {
-    core.syslog(level, fmt.apply(null, arguments));
-  };
-}
-
-wrap('emerg', 'LOG_EMERG');
-wrap('alert', 'LOG_ALERT');
-wrap('crit', 'LOG_CRIT');
-wrap('error', 'LOG_ERR');
-wrap('err', 'LOG_ERR');
-wrap('warn', 'LOG_WARNING');
-wrap('warning', 'LOG_WARNING');
-wrap('note', 'LOG_NOTICE');
-wrap('notice', 'LOG_NOTICE');
-wrap('info', 'LOG_INFO');
-wrap('debug', 'LOG_DEBUG');
 
 // Low-level API
 exports.setmask = core.setlogmask;
@@ -107,11 +80,14 @@ function setMask(level, upto) {
 
 // Writable stream for syslog.
 
-function Stream(level, facility) {
+function Stream(ident, option, level, facility) {
   if (!(this instanceof Stream))
       return new Stream(level, facility);
 
-  this.priority = toLevel(level) | toFacility(facility);
+  this.ident = ident;
+  this.option = option;
+  this.facility = toFacility(facility);
+  this.level = toLevel(level);
 
   Writable.apply(this);
 }
@@ -119,7 +95,7 @@ function Stream(level, facility) {
 inherits(Stream, Writable);
 
 Stream.prototype._write = function(chunk, encoding, callback) {
-  core.syslog(this.priority, chunk, callback);
+  core.syslog(this.ident, this.option, this.facility, this.level, chunk, callback);
 };
 
 // Low-level API

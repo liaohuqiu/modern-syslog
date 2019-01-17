@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <node.h>
 #include <nan.h>
 #include <syslog.h>
@@ -16,44 +17,35 @@ namespace {
 
 class Worker: public Nan::AsyncWorker {
     public:
-        Worker(Nan::Callback *callback, int priority, char* message)
-            : Nan::AsyncWorker(callback), priority(priority), message(message) {
+        Worker(Nan::Callback *callback, char* ident, int option, int facility, int priority, char* message)
+            : Nan::AsyncWorker(callback), ident(ident), option(option), facility(facility), priority(priority), message(message) {
             }
         ~Worker() {
+            delete[] ident;
             delete[] message;
         }
 
         void Execute() {
+            openlog(ident, option, facility);
             syslog(priority, "%s", message);
+            closelog();
         }
 
         void HandleOKCallback() {
             Nan::HandleScope scope;
 
-            if(callback)
+            if (callback) {
                 callback->Call(0, NULL);
+            }
         };
 
     private:
+        char* ident;
+        int option;
+        int facility;
         int priority;
         char* message;
 };
-
-static char ident[1024];
-
-// wrap: void openlog(const char *ident, int option, int facility);
-NAN_METHOD(OpenLog) {
-
-    // openlog requires ident be statically allocated. Write doesn't guarantee
-    // NULL-termination, so preserve last byte as NULL.
-    info[0]->ToString()->WriteUtf8(ident, sizeof(ident)-1);
-    int option = info[1]->Int32Value();
-    int facility = info[2]->Int32Value();
-
-    openlog(ident, option, facility);
-
-    return;
-}
 
 static char* dupBuf(const Handle<Value>& arg) {
     const char* mem = node::Buffer::Data(arg);
@@ -75,25 +67,34 @@ static char* dupStr(const Local<String>& m) {
     return s;
 }
 
-// wrap: void syslog(int priority, const char *format, ...);
+// wrap: void syslog(const char *ident, int option, int facility, int priority, const char *format, ...);
 NAN_METHOD(SysLog) {
 
-    int priority = info[0]->Int32Value();
-    char* message = NULL;
-    Nan::Callback *callback = NULL;
-
-    if (info[2]->IsFunction())
-        callback = new Nan::Callback(info[2].As<Function>());
-
-    if(node::Buffer::HasInstance(info[1])) {
-        message = dupBuf(info[1]);
+    char* ident = NULL;
+    if (node::Buffer::HasInstance(info[0])) {
+        ident = dupBuf(info[0]);
     } else {
-        message = dupStr(info[1]->ToString());
+        ident = dupStr(info[0]->ToString());
     }
 
+    int option = info[1]->Int32Value();
+    int facility = info[2]->Int32Value();
+    int priority = info[3]->Int32Value();
+
+    char* message = NULL;
+    if (node::Buffer::HasInstance(info[4])) {
+        message = dupBuf(info[4]);
+    } else {
+        message = dupStr(info[4]->ToString());
+    }
+
+    Nan::Callback *callback = NULL;
+    if (info[5]->IsFunction())
+        callback = new Nan::Callback(info[5].As<Function>());
+
     if (message) {
-        Nan::AsyncQueueWorker(new Worker(callback, priority, message));
-    } else if(callback) {
+        Nan::AsyncQueueWorker(new Worker(callback, ident, option, facility, priority, message));
+    } else if (callback) {
         callback->Call(0, NULL);
         delete callback;
     }
@@ -101,33 +102,13 @@ NAN_METHOD(SysLog) {
     return;
 }
 
-// wrap: int setlogmask(int mask);
-NAN_METHOD(SetLogMask) {
-
-    int mask = info[0]->Int32Value();
-    int last = setlogmask(mask);
-
-    info.GetReturnValue().Set(Nan::New<Number>(last));
-}
-
-// wrap: void closelog(void);
-NAN_METHOD(CloseLog) {
-
-    closelog();
-
-    return;
-}
-
 NAN_MODULE_INIT(Init) {
-    Nan::Export(target, "openlog", OpenLog);
     Nan::Export(target, "syslog", SysLog);
-    Nan::Export(target, "setlogmask", SetLogMask);
-    Nan::Export(target, "closelog", CloseLog);
 
     Local<Object> where = Nan::New<Object>();
 #define DEFINE(N) Nan::Set(where, Nan::New<String>(#N).ToLocalChecked(), Nan::New<Number>(N))
 
-    // option argument to openlog() is an OR of any of these:
+    // option argument is an OR of any of these:
     Nan::Set(target, Nan::New<String>("option").ToLocalChecked(), where = Nan::New<Object>());
     DEFINE(LOG_CONS);
     DEFINE(LOG_NDELAY);
@@ -140,7 +121,7 @@ NAN_MODULE_INIT(Init) {
     DEFINE(LOG_PID);
     DEFINE(LOG_NOWAIT);
 
-    // facility argument to openlog() is any ONE of these:
+    // facility argument is any ONE of these:
     Nan::Set(target, Nan::New<String>("facility").ToLocalChecked(), where = Nan::New<Object>());
     DEFINE(LOG_AUTH);
 #ifdef LOG_AUTHPRIV
